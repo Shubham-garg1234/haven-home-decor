@@ -13,6 +13,7 @@ interface CartContextType {
   clearCart: () => Promise<void>;
   itemCount: number;
   subtotal: number;
+  total: number;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -149,6 +150,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       clearCart,
       itemCount,
       subtotal,
+      total: subtotal,
     }}>
       {children}
     </CartContext.Provider>

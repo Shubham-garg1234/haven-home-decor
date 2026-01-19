@@ -1,0 +1,536 @@
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import api from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { useCart } from '@/contexts/CartContext';
+import Layout from '@/components/layout/Layout';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Separator } from '@/components/ui/separator';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Plus, MapPin, CreditCard, Truck } from 'lucide-react';
+import { formatPrice } from '@/lib/utils';
+import { toast } from 'sonner';
+import type { Address } from '@/types';
+
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
+
+const Checkout = () => {
+  const navigate = useNavigate();
+  const { user, session } = useAuth();
+  const { items, total, clearCart } = useCart();
+  const [selectedAddressId, setSelectedAddressId] = useState<string>('');
+  const [isAddressDialogOpen, setIsAddressDialogOpen] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState('cod');
+  const [addressForm, setAddressForm] = useState({
+    full_name: '',
+    phone: '',
+    address_line_1: '',
+    address_line_2: '',
+    city: '',
+    state: '',
+    postal_code: '',
+  });
+
+  const { data: addressesData, refetch: refetchAddresses } = useQuery({
+    queryKey: ['addresses', user?.id],
+    enabled: !!user && !!session?.access_token,
+    queryFn: async () => {
+      const response = await api.getAddresses(session!.access_token);
+      return response.addresses as Address[];
+    },
+  });
+
+  const addresses = addressesData || [];
+
+  const createAddressMutation = useMutation({
+    mutationFn: async (data: any) => {
+      if (!session?.access_token) throw new Error('Not authenticated');
+      await api.createAddress({
+        ...data,
+        country: 'India',
+      }, session.access_token);
+    },
+    onSuccess: () => {
+      refetchAddresses();
+      setIsAddressDialogOpen(false);
+      toast.success('Address added successfully');
+      setAddressForm({
+        full_name: '',
+        phone: '',
+        address_line_1: '',
+        address_line_2: '',
+        city: '',
+        state: '',
+        postal_code: '',
+      });
+    },
+    onError: (error: any) => {
+      toast.error(error.message || 'Failed to add address');
+    },
+  });
+
+  const createOrderMutation = useMutation({
+    mutationFn: async () => {
+      if (!session?.access_token) throw new Error('Not authenticated');
+      
+      const selectedAddress = addresses?.find(a => a.id === selectedAddressId);
+      if (!selectedAddress) throw new Error('Please select an address');
+
+      const orderData = {
+        shipping_address: selectedAddress,
+        payment_method: paymentMethod,
+      };
+
+      const response = await api.createOrder(orderData, session.access_token);
+      return response.order;
+    },
+    onSuccess: (order) => {
+      clearCart();
+      toast.success('Order placed successfully!');
+      navigate(`/order-confirmation/${order.order_number}`);
+    },
+    onError: (error: any) => {
+      toast.error(error.message || 'Failed to place order');
+    },
+  });
+
+  if (!user) {
+    navigate('/auth');
+    return null;
+  }
+
+  if (items.length === 0) {
+    navigate('/cart');
+    return null;
+  }
+
+  const subtotal = total;
+  const shippingCost = subtotal >= 2000 ? 0 : 99;
+  const tax = Math.round(subtotal * 0.18);
+  const orderTotal = subtotal + shippingCost + tax;
+
+  const handleAddressSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    createAddressMutation.mutate(addressForm);
+  };
+
+  const loadRazorpayScript = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (window.Razorpay) {
+        resolve();
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load Razorpay script'));
+      document.body.appendChild(script);
+    });
+  };
+
+  const handlePlaceOrder = async () => {
+    if (!selectedAddressId) {
+      toast.error('Please select a delivery address');
+      return;
+    }
+
+    if (!session?.access_token) {
+      toast.error('Please sign in to place order');
+      return;
+    }
+
+    // If COD, proceed with normal order creation
+    if (paymentMethod === 'cod') {
+      createOrderMutation.mutate();
+      return;
+    }
+
+    // For online payment, use backend to create Razorpay order
+    const selectedAddress = addresses?.find(a => a.id === selectedAddressId);
+    if (!selectedAddress) {
+      toast.error('Please select a delivery address');
+      return;
+    }
+
+    try {
+      await loadRazorpayScript();
+
+      const razorpayKey = import.meta.env.VITE_RAZORPAY_KEY_ID;
+      
+      if (!razorpayKey || razorpayKey === 'rzp_test_XXXXXXXXXXXXXXXX') {
+        toast.error('Razorpay key not configured. Please check your .env file.');
+        return;
+      }
+
+      // Create Razorpay order via backend (amount in rupees)
+      const paymentOrder = await api.createPaymentOrder(
+        orderTotal,
+        'INR',
+        {
+          user_id: user.id,
+          items_count: items.length,
+        },
+        session.access_token
+      );
+
+      const options = {
+        key: razorpayKey,
+        amount: paymentOrder.amount, // Already in paise from backend
+        currency: paymentOrder.currency,
+        order_id: paymentOrder.order_id,
+        name: 'Haven Home Decor',
+        description: `Order for ${items.length} item(s)`,
+        handler: async (response: any) => {
+          // Verify payment
+          try {
+            await api.verifyPayment({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            }, session.access_token);
+
+            // Create order with payment details
+            const orderData = {
+              shipping_address: selectedAddress,
+              payment_method: 'online',
+              cart_items: items.map(item => ({
+                product_id: item.product_id,
+                variant_id: item.variant_id,
+                quantity: item.quantity,
+              })),
+            };
+
+            const orderResponse = await api.createOrder(orderData, session.access_token);
+            
+            clearCart();
+            toast.success('Payment successful! Order placed successfully.');
+            navigate(`/order-confirmation/${orderResponse.order.order_number}`);
+          } catch (error: any) {
+            toast.error(error.message || 'Failed to verify payment or create order');
+          }
+        },
+        prefill: {
+          name: selectedAddress.full_name,
+          contact: selectedAddress.phone,
+          email: user?.email || '',
+        },
+        theme: {
+          color: '#F37254',
+        },
+        modal: {
+          ondismiss: () => {
+            toast.info('Payment cancelled');
+          },
+        },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to initialize payment gateway');
+    }
+  };
+
+  return (
+    <Layout>
+      <div className="container mx-auto px-4 py-8">
+        <h1 className="text-3xl font-bold mb-8">Checkout</h1>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left Column - Address & Payment */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Delivery Address */}
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <MapPin className="w-5 h-5" />
+                  Delivery Address
+                </CardTitle>
+                <Dialog open={isAddressDialogOpen} onOpenChange={setIsAddressDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" size="sm">
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add New
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Add New Address</DialogTitle>
+                    </DialogHeader>
+                    <form onSubmit={handleAddressSubmit} className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <Label htmlFor="full_name">Full Name *</Label>
+                          <Input
+                            id="full_name"
+                            value={addressForm.full_name}
+                            onChange={(e) => setAddressForm({ ...addressForm, full_name: e.target.value })}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="phone">Phone *</Label>
+                          <Input
+                            id="phone"
+                            value={addressForm.phone}
+                            onChange={(e) => setAddressForm({ ...addressForm, phone: e.target.value })}
+                            required
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <Label htmlFor="address_line_1">Address Line 1 *</Label>
+                        <Input
+                          id="address_line_1"
+                          value={addressForm.address_line_1}
+                          onChange={(e) => setAddressForm({ ...addressForm, address_line_1: e.target.value })}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="address_line_2">Address Line 2</Label>
+                        <Input
+                          id="address_line_2"
+                          value={addressForm.address_line_2}
+                          onChange={(e) => setAddressForm({ ...addressForm, address_line_2: e.target.value })}
+                        />
+                      </div>
+                      <div className="grid grid-cols-3 gap-4">
+                        <div>
+                          <Label htmlFor="city">City *</Label>
+                          <Input
+                            id="city"
+                            value={addressForm.city}
+                            onChange={(e) => setAddressForm({ ...addressForm, city: e.target.value })}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="state">State *</Label>
+                          <Input
+                            id="state"
+                            value={addressForm.state}
+                            onChange={(e) => setAddressForm({ ...addressForm, state: e.target.value })}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="postal_code">Postal Code *</Label>
+                          <Input
+                            id="postal_code"
+                            value={addressForm.postal_code}
+                            onChange={(e) => setAddressForm({ ...addressForm, postal_code: e.target.value })}
+                            required
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end space-x-2">
+                        <Button type="button" variant="outline" onClick={() => setIsAddressDialogOpen(false)}>
+                          Cancel
+                        </Button>
+                        <Button type="submit" disabled={createAddressMutation.isPending}>
+                          Save Address
+                        </Button>
+                      </div>
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              </CardHeader>
+              <CardContent>
+                {addresses && addresses.length > 0 ? (
+                  <RadioGroup value={selectedAddressId} onValueChange={setSelectedAddressId}>
+                    <div className="space-y-3">
+                      {addresses.map((address) => (
+                        <div
+                          key={address.id}
+                          className={`p-4 border rounded-lg cursor-pointer transition-colors ${
+                            selectedAddressId === address.id
+                              ? 'border-primary bg-primary/5'
+                              : 'border-border hover:border-primary/50'
+                          }`}
+                          onClick={() => setSelectedAddressId(address.id)}
+                        >
+                          <div className="flex items-start gap-3">
+                            <RadioGroupItem value={address.id} id={address.id} />
+                            <div className="flex-1">
+                              <p className="font-medium">{address.full_name}</p>
+                              <p className="text-sm text-muted-foreground">{address.phone}</p>
+                              <p className="text-sm text-muted-foreground mt-1">
+                                {address.address_line_1}
+                                {address.address_line_2 && `, ${address.address_line_2}`}
+                              </p>
+                              <p className="text-sm text-muted-foreground">
+                                {address.city}, {address.state} {address.postal_code}
+                              </p>
+                            </div>
+                            {address.is_default && (
+                              <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded">
+                                Default
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </RadioGroup>
+                ) : (
+                  <p className="text-muted-foreground text-center py-4">
+                    No addresses found. Add a new address to continue.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Payment Method */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <CreditCard className="w-5 h-5" />
+                  Payment Method
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <RadioGroup value={paymentMethod} onValueChange={setPaymentMethod}>
+                  <div className="space-y-3">
+                    <div
+                      className={`p-4 border rounded-lg cursor-pointer transition-colors ${
+                        paymentMethod === 'cod'
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:border-primary/50'
+                      }`}
+                      onClick={() => setPaymentMethod('cod')}
+                    >
+                      <div className="flex items-center gap-3">
+                        <RadioGroupItem value="cod" id="cod" />
+                        <div>
+                          <p className="font-medium">Cash on Delivery</p>
+                          <p className="text-sm text-muted-foreground">
+                            Pay when your order arrives
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div
+                      className={`p-4 border rounded-lg cursor-pointer transition-colors ${
+                        paymentMethod === 'online'
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:border-primary/50'
+                      }`}
+                      onClick={() => setPaymentMethod('online')}
+                    >
+                      <div className="flex items-center gap-3">
+                        <RadioGroupItem value="online" id="online" />
+                        <div>
+                          <p className="font-medium">Pay Online</p>
+                          <p className="text-sm text-muted-foreground">
+                            Credit/Debit Card, UPI, Net Banking
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </RadioGroup>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Right Column - Order Summary */}
+          <div>
+            <Card className="sticky top-24">
+              <CardHeader>
+                <CardTitle>Order Summary</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Items */}
+                <div className="space-y-3 max-h-64 overflow-y-auto">
+                  {items.map((item) => (
+                    <div key={item.id} className="flex items-center gap-3">
+                      {item.product?.images?.[0] && (
+                        <img
+                          src={item.product.images[0]}
+                          alt={item.product?.name}
+                          className="w-12 h-12 object-cover rounded"
+                        />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{item.product?.name}</p>
+                        <p className="text-xs text-muted-foreground">Qty: {item.quantity}</p>
+                      </div>
+                      <p className="text-sm font-medium">
+                        {formatPrice((item.product?.price || 0) * item.quantity)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                <Separator />
+
+                {/* Totals */}
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Subtotal</span>
+                    <span>{formatPrice(subtotal)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground flex items-center gap-1">
+                      <Truck className="w-4 h-4" /> Shipping
+                    </span>
+                    <span>
+                      {shippingCost === 0 ? (
+                        <span className="text-green-600">Free</span>
+                      ) : (
+                        formatPrice(shippingCost)
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Tax (18% GST)</span>
+                    <span>{formatPrice(tax)}</span>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="flex justify-between text-lg font-bold">
+                  <span>Total</span>
+                  <span>{formatPrice(orderTotal)}</span>
+                </div>
+
+                {subtotal < 2000 && (
+                  <p className="text-xs text-muted-foreground text-center">
+                    Add {formatPrice(2000 - subtotal)} more for free shipping
+                  </p>
+                )}
+
+                <Button
+                  className="w-full"
+                  size="lg"
+                  onClick={handlePlaceOrder}
+                  disabled={createOrderMutation.isPending || !selectedAddressId}
+                >
+                  {createOrderMutation.isPending 
+                    ? 'Placing Order...' 
+                    : paymentMethod === 'online' 
+                      ? 'Proceed to Payment' 
+                      : 'Place Order'}
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </Layout>
+  );
+};
+
+export default Checkout;

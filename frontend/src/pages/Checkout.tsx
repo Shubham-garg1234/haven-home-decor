@@ -166,11 +166,6 @@ const Checkout = () => {
       await loadRazorpayScript();
 
       const razorpayKey = import.meta.env.VITE_RAZORPAY_KEY_ID;
-      
-      if (!razorpayKey || razorpayKey === 'rzp_test_XXXXXXXXXXXXXXXX') {
-        toast.error('Razorpay key not configured. Please check your .env file.');
-        return;
-      }
 
       // Create Razorpay order via backend (amount in rupees)
       const paymentOrder = await api.createPaymentOrder(
@@ -199,10 +194,15 @@ const Checkout = () => {
               razorpay_signature: response.razorpay_signature,
             }, session.access_token);
 
-            // Create order with payment details
+            // Create order with payment details and set payment_status to 'paid'
             const orderData = {
               shipping_address: selectedAddress,
               payment_method: 'online',
+              payment_status: 'paid',
+              payment_details: {
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+              },
               cart_items: items.map(item => ({
                 product_id: item.product_id,
                 variant_id: item.variant_id,

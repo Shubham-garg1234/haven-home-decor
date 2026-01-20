@@ -113,28 +113,43 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       case 'payment.captured':
         // Update order payment status
         const payment = payload.payment.entity;
-        const orderId = payment.order_id;
+        const razorpayOrderId = payment.order_id;
 
         // Find order by Razorpay order ID in notes
-        const { data: orders } = await supabaseAdmin
+        // First, get all orders and filter by razorpay_order_id in notes
+        const { data: allOrders } = await supabaseAdmin
           .from('orders')
           .select('*')
-          .contains('notes', { razorpay_order_id: orderId });
+          .not('notes', 'is', null);
 
-        if (orders && orders.length > 0) {
+        const matchingOrder = allOrders?.find(order => {
+          if (!order.notes) return false;
+          try {
+            const notes = typeof order.notes === 'string' 
+              ? JSON.parse(order.notes) 
+              : order.notes;
+            return notes?.razorpay_order_id === razorpayOrderId;
+          } catch (e) {
+            return false;
+          }
+        });
+
+        if (matchingOrder) {
+          const existingNotes = typeof matchingOrder.notes === 'string' 
+            ? JSON.parse(matchingOrder.notes) 
+            : matchingOrder.notes || {};
+
           await supabaseAdmin
             .from('orders')
             .update({
               payment_status: 'paid',
               notes: JSON.stringify({
-                ...(typeof orders[0].notes === 'string' 
-                  ? JSON.parse(orders[0].notes) 
-                  : orders[0].notes || {}),
+                ...existingNotes,
                 razorpay_payment_id: payment.id,
                 payment_captured_at: new Date().toISOString(),
               }),
             })
-            .eq('id', orders[0].id);
+            .eq('id', matchingOrder.id);
         }
         break;
 

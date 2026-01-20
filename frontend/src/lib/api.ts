@@ -3,7 +3,7 @@
  * Handles all API requests to the backend server
  */
 
-const API_BASE_URL = 'https://haven-home-decor.vercel.app/api';
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL;
 
 interface RequestOptions extends RequestInit {
   token?: string;

@@ -101,7 +101,13 @@ router.get('/:identifier', authenticate, async (req, res) => {
  */
 router.post('/', authenticate, async (req, res) => {
   try {
-    const { shipping_address, payment_method = 'cod', cart_items } = req.body;
+    const { 
+      shipping_address, 
+      payment_method = 'cod', 
+      cart_items,
+      payment_status,
+      payment_details 
+    } = req.body;
 
     if (!shipping_address) {
       return res.status(400).json({ error: 'Shipping address is required' });
@@ -163,6 +169,21 @@ router.post('/', authenticate, async (req, res) => {
     const tax = Math.round(subtotal * 0.18);
     const total = subtotal + shippingCost + tax;
 
+    // Determine payment status
+    let finalPaymentStatus = 'pending';
+    if (payment_status) {
+      finalPaymentStatus = payment_status;
+    } else {
+      finalPaymentStatus = payment_method === 'cod' ? 'pending' : 'pending';
+    }
+
+    // Prepare order notes with payment details if provided
+    const notes = payment_details ? {
+      razorpay_order_id: payment_details.razorpay_order_id,
+      razorpay_payment_id: payment_details.razorpay_payment_id,
+      payment_verified_at: new Date().toISOString(),
+    } : null;
+
     // Create order
     const { data: order, error: orderError } = await supabaseAdmin
       .from('orders')
@@ -174,9 +195,10 @@ router.post('/', authenticate, async (req, res) => {
         total,
         shipping_address,
         payment_method,
-        payment_status: payment_method === 'cod' ? 'pending' : 'pending',
+        payment_status: finalPaymentStatus,
         status: 'pending',
         order_number: 'TEMP', // Will be overwritten by trigger
+        notes: notes ? JSON.stringify(notes) : null,
       })
       .select()
       .single();

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { ChevronDown, Filter, ImageUp, LoaderCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,12 +40,19 @@ const priceRanges = [
 
 const Products = () => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [imageSearch, setImageSearch] = useState<{
     description: string;
     products: Product[];
-  } | null>(null);
+  } | null>(
+    () =>
+      (location.state?.imageSearch as
+        | { description: string; products: Product[] }
+        | undefined) || null,
+  );
   const imageSearchRequestRef = useRef(0);
   const [isSearchingImage, setIsSearchingImage] = useState(false);
   const [imageSearchError, setImageSearchError] = useState('');
@@ -55,13 +62,27 @@ const Products = () => {
   const sort = searchParams.get('sort') || 'newest';
   const minPrice = Number(searchParams.get('minPrice')) || 0;
   const maxPrice = Number(searchParams.get('maxPrice')) || 999999;
+  const filtersKey = JSON.stringify([search, categorySlug, sort, minPrice, maxPrice]);
+  const previousFiltersKeyRef = useRef(filtersKey);
+  const incomingImageSearch = location.state?.imageSearch as
+    | { description: string; products: Product[] }
+    | undefined;
 
   useEffect(() => {
+    if (!incomingImageSearch) return;
+
+    setImageSearch(incomingImageSearch);
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [incomingImageSearch, location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    if (previousFiltersKeyRef.current === filtersKey) return;
+    previousFiltersKeyRef.current = filtersKey;
     imageSearchRequestRef.current += 1;
     setImageSearch(null);
     setImageSearchError('');
     setIsSearchingImage(false);
-  }, [search, categorySlug, sort, minPrice, maxPrice]);
+  }, [filtersKey]);
 
   const { data: categories } = useQuery({
     queryKey: ['categories'],

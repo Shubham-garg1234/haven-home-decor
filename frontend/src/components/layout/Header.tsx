@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, ShoppingCart, Heart, User, Menu, X, LogOut, Settings } from 'lucide-react';
+import { Camera, LoaderCircle, Search, ShoppingCart, Heart, User, Menu, X, LogOut, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -14,6 +14,8 @@ import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCart } from '@/contexts/CartContext';
 import { Badge } from '@/components/ui/badge';
+import api from '@/lib/api';
+import { toast } from 'sonner';
 
 const Header = () => {
   const { user, isAdmin, signOut } = useAuth();
@@ -21,11 +23,38 @@ const Header = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isSearchingImage, setIsSearchingImage] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
       navigate(`/products?search=${encodeURIComponent(searchQuery)}`);
+    }
+  };
+
+  const handleImageSearch = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      toast.error('Choose a JPEG, PNG, or WebP image.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Image must be 5 MB or smaller.');
+      return;
+    }
+
+    setIsSearchingImage(true);
+    try {
+      const result = await api.searchProductsByImage(file);
+      navigate('/products', { state: { imageSearch: result } });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Image search failed. Please try again.');
+    } finally {
+      setIsSearchingImage(false);
     }
   };
 
@@ -51,6 +80,14 @@ const Header = () => {
       
       {/* Main header */}
       <div className="container mx-auto px-4 py-4">
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          className="hidden"
+          onChange={handleImageSearch}
+          aria-label="Choose an image to search"
+        />
         <div className="flex items-center justify-between gap-4">
           {/* Mobile menu */}
           <Sheet open={isMenuOpen} onOpenChange={setIsMenuOpen}>
@@ -91,17 +128,56 @@ const Header = () => {
                 placeholder="Search for home decor, furniture, lighting..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 pr-4 w-full bg-background"
+                className="pl-10 pr-12 w-full bg-background"
               />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
+                onClick={() => imageInputRef.current?.click()}
+                disabled={isSearchingImage}
+                aria-label="Search products by image"
+                title="Search products by image"
+              >
+                {isSearchingImage ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Camera className="h-4 w-4" />
+                )}
+              </Button>
             </div>
           </form>
 
           {/* Right actions */}
           <div className="flex items-center gap-2 md:gap-4">
             {/* Search - Mobile */}
-            <Button variant="ghost" size="icon" className="md:hidden">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden"
+              onClick={() => navigate('/products')}
+              aria-label="Browse and search products"
+              title="Browse and search products"
+            >
               <Search className="h-5 w-5" />
             </Button>
+            <div className="relative md:hidden">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => imageInputRef.current?.click()}
+                disabled={isSearchingImage}
+                aria-label="Search products by image"
+                title="Search products by image"
+              >
+                {isSearchingImage ? (
+                  <LoaderCircle className="h-5 w-5 animate-spin" />
+                ) : (
+                  <Camera className="h-5 w-5" />
+                )}
+              </Button>
+            </div>
 
             {/* Wishlist */}
             {user && (

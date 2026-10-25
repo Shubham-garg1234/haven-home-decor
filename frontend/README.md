@@ -12,7 +12,6 @@ A modern e-commerce platform for home decor products built with React, TypeScrip
 - **Admin Dashboard**: Complete admin panel for managing products, categories, and orders
 
 ## 📁 Project Structure
-
 ```
 haven-home-decor/
 ├── backend/              # Express.js backend server

@@ -8,7 +8,7 @@ type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
 };
-
+// chatAssistant
 const ChatAssistant = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');

@@ -44,6 +44,11 @@ RAZORPAY_WEBHOOK_SECRET=your_webhook_secret_here
 
 # JWT Secret (optional)
 JWT_SECRET=your_jwt_secret_here
+
+# OpenAI-powered image search and shopping assistant
+OPENAI_API_KEY=your_openai_api_key_here
+# Optional; defaults to gpt-4o-mini
+OPENAI_MODEL=gpt-4o-mini
 ```
 
 ### 3. Run the Server
@@ -77,6 +82,13 @@ The server will start on `http://localhost:3001`
 - `POST /api/products` - Create product (admin)
 - `PUT /api/products/:id` - Update product (admin)
 - `DELETE /api/products/:id` - Delete product (admin)
+
+### AI Assistant
+
+- `POST /api/assistant/image-search` - Search the active catalog using a JPEG, PNG, or WebP image sent as the raw request body (maximum 5 MB)
+- `POST /api/assistant/chat` - Get a shopping assistant reply. Send `{ "messages": [{ "role": "user", "content": "..." }] }`; at most 8 user/assistant messages are used as context.
+
+Both endpoints require `OPENAI_API_KEY` on the backend. Never add the key to the frontend environment or send it to the browser.
 
 ### Categories
 
@@ -145,5 +157,4 @@ The server uses:
 - All database operations respect Row Level Security (RLS) policies
 - Payment webhooks should be configured in Razorpay dashboard
 - Make sure to set `FRONTEND_URL` for CORS configuration
-
 

@@ -19,7 +19,7 @@ import AdminOrders from "./pages/admin/Orders";
 import Checkout from "./pages/Checkout";
 import OrderConfirmation from "./pages/OrderConfirmation";
 import Orders from "./pages/Orders";
-import { Contact } from "lucide-react";
+import ChatAssistant from "@/components/assistant/ChatAssistant";
 
 const queryClient = new QueryClient();
 
@@ -47,6 +47,7 @@ const App = () => (
               <Route path="/orders" element={<Orders />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
+            <ChatAssistant />
           </BrowserRouter>
         </TooltipProvider>
       </CartProvider>

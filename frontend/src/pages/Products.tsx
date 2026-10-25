@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Filter, X, ChevronDown } from 'lucide-react';
+import { ChevronDown, Filter, ImageUp, LoaderCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -41,12 +41,27 @@ const priceRanges = [
 const Products = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const [imageSearch, setImageSearch] = useState<{
+    description: string;
+    products: Product[];
+  } | null>(null);
+  const imageSearchRequestRef = useRef(0);
+  const [isSearchingImage, setIsSearchingImage] = useState(false);
+  const [imageSearchError, setImageSearchError] = useState('');
   
   const search = searchParams.get('search') || '';
   const categorySlug = searchParams.get('category') || '';
   const sort = searchParams.get('sort') || 'newest';
   const minPrice = Number(searchParams.get('minPrice')) || 0;
   const maxPrice = Number(searchParams.get('maxPrice')) || 999999;
+
+  useEffect(() => {
+    imageSearchRequestRef.current += 1;
+    setImageSearch(null);
+    setImageSearchError('');
+    setIsSearchingImage(false);
+  }, [search, categorySlug, sort, minPrice, maxPrice]);
 
   const { data: categories } = useQuery({
     queryKey: ['categories'],
@@ -90,10 +105,49 @@ const Products = () => {
       }
       return sorted as Product[];
     },
-    enabled: !categorySlug || !!categories,
+    enabled: !imageSearch && (!categorySlug || !!categories),
   });
 
+  const handleImageSearch = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    const requestId = ++imageSearchRequestRef.current;
+    setImageSearch(null);
+    setIsSearchingImage(false);
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setImageSearchError('Choose a JPEG, PNG, or WebP image.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setImageSearchError('Image must be 5 MB or smaller.');
+      return;
+    }
+
+    setImageSearchError('');
+    setIsSearchingImage(true);
+    try {
+      const result = await api.searchProductsByImage(file);
+      if (imageSearchRequestRef.current === requestId) {
+        setImageSearch({
+          description: result.description,
+          products: result.products,
+        });
+      }
+    } catch (error) {
+      if (imageSearchRequestRef.current === requestId) {
+        setImageSearchError(
+          error instanceof Error ? error.message : 'Image search failed. Please try again.',
+        );
+      }
+    } finally {
+      if (imageSearchRequestRef.current === requestId) setIsSearchingImage(false);
+    }
+  };
+
   const updateFilter = (key: string, value: string) => {
+    setImageSearch(null);
     const params = new URLSearchParams(searchParams);
     if (value) {
       params.set(key, value);
@@ -104,10 +158,12 @@ const Products = () => {
   };
 
   const clearFilters = () => {
+    setImageSearch(null);
     setSearchParams({});
   };
 
   const hasActiveFilters = search || categorySlug || minPrice > 0 || maxPrice < 999999;
+  const displayedProducts = imageSearch?.products || products || [];
 
   const FilterContent = () => (
     <div className="space-y-6">
@@ -185,14 +241,44 @@ const Products = () => {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
           <div>
             <h1 className="font-serif text-3xl font-bold text-foreground">
-              {search ? `Search: "${search}"` : categorySlug ? categories?.find(c => c.slug === categorySlug)?.name || 'Products' : 'All Products'}
+              {imageSearch
+                ? `Visual matches for "${imageSearch.description}"`
+                : search
+                  ? `Search: "${search}"`
+                  : categorySlug
+                    ? categories?.find(c => c.slug === categorySlug)?.name || 'Products'
+                    : 'All Products'}
             </h1>
             <p className="text-muted-foreground mt-1">
-              {products?.length || 0} products found
+              {displayedProducts.length} products found
             </p>
           </div>
 
           <div className="flex items-center gap-4">
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              onChange={handleImageSearch}
+              aria-label="Choose an image to search"
+            />
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => imageInputRef.current?.click()}
+              disabled={isSearchingImage}
+            >
+              {isSearchingImage ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <ImageUp className="h-4 w-4" />
+              )}
+              <span className="hidden sm:inline">
+                {isSearchingImage ? 'Searching...' : 'Search by image'}
+              </span>
+              <span className="sm:hidden">Image</span>
+            </Button>
             {/* Mobile Filter Button */}
             <Sheet open={isFilterOpen} onOpenChange={setIsFilterOpen}>
               <SheetTrigger asChild>
@@ -226,6 +312,12 @@ const Products = () => {
           </div>
         </div>
 
+        {imageSearchError && (
+          <p role="alert" className="mb-6 text-sm text-destructive">
+            {imageSearchError}
+          </p>
+        )}
+
         <div className="flex gap-8">
           {/* Desktop Sidebar */}
           <aside className="hidden lg:block w-64 flex-shrink-0">
@@ -234,24 +326,32 @@ const Products = () => {
 
           {/* Products Grid */}
           <div className="flex-1">
-            {isLoading ? (
+            {isSearchingImage || (!imageSearch && isLoading) ? (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4 md:gap-6">
                 {[...Array(9)].map((_, i) => (
                   <div key={i} className="aspect-square bg-muted animate-pulse" />
                 ))}
               </div>
-            ) : products && products.length > 0 ? (
+            ) : displayedProducts.length > 0 ? (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4 md:gap-6">
-                {products.map((product) => (
+                {displayedProducts.map((product) => (
                   <ProductCard key={product.id} product={product} />
                 ))}
               </div>
             ) : (
               <div className="text-center py-16">
-                <p className="text-muted-foreground text-lg mb-4">No products found</p>
-                <Button variant="outline" onClick={clearFilters}>
-                  Clear Filters
-                </Button>
+                <p className="text-muted-foreground text-lg mb-4">
+                  {imageSearch ? 'No similar products found. Try another image.' : 'No products found'}
+                </p>
+                {imageSearch ? (
+                  <Button variant="outline" onClick={() => setImageSearch(null)}>
+                    Browse All Products
+                  </Button>
+                ) : (
+                  <Button variant="outline" onClick={clearFilters}>
+                    Clear Filters
+                  </Button>
+                )}
               </div>
             )}
           </div>

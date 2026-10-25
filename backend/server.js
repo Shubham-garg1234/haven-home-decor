@@ -12,6 +12,7 @@ import orderRoutes from './routes/orders.js';
 import paymentRoutes from './routes/payments.js';
 import adminRoutes from './routes/admin.js';
 import addressRoutes from './routes/addresses.js';
+import assistantRoutes from './routes/assistant.js';
 
 // Load environment variables
 dotenv.config();
@@ -42,6 +43,7 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/addresses', addressRoutes);
+app.use('/api/assistant', assistantRoutes);
 
 // Error handling
 app.use(notFound);
@@ -55,5 +57,4 @@ app.listen(PORT, () => {
 });
 
 export default app;
-
 

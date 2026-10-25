@@ -3,6 +3,8 @@
  * Handles all API requests to the backend server
  */
 
+import type { Product } from '@/types';
+
 const API_BASE_URL = import.meta.env.VITE_BACKEND_URL;
 
 interface RequestOptions extends RequestInit {
@@ -105,6 +107,28 @@ class ApiClient {
 
   async getProduct(identifier: string) {
     return this.request<{ product: any }>(`/products/${identifier}`);
+  }
+
+  async searchProductsByImage(file: File) {
+    const response = await fetch(`${this.baseURL}/assistant/image-search`, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type },
+      body: file,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Image search failed.' }));
+      throw new Error(error.error || `HTTP error! status: ${response.status}`);
+    }
+
+    return response.json() as Promise<{ description: string; products: Product[] }>;
+  }
+
+  async chatWithAssistant(messages: { role: 'user' | 'assistant'; content: string }[]) {
+    return this.request<{ reply: string }>('/assistant/chat', {
+      method: 'POST',
+      body: JSON.stringify({ messages }),
+    });
   }
 
   async createProduct(productData: any, token: string) {
@@ -310,4 +334,3 @@ class ApiClient {
 
 export const api = new ApiClient(API_BASE_URL);
 export default api;
-

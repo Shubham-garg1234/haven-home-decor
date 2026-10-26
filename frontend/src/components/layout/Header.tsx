@@ -17,6 +17,34 @@ import { Badge } from '@/components/ui/badge';
 import api from '@/lib/api';
 import { toast } from 'sonner';
 
+const MAX_IMAGE_DIMENSION = 1600;
+
+const prepareImageForSearch = async (file: File) => {
+  if (typeof createImageBitmap !== 'function') return file;
+
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not prepare the selected image. Try a JPEG or PNG.');
+
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (result) => (result ? resolve(result) : reject(new Error('Could not encode the image. Try a JPEG or PNG.'))),
+        'image/jpeg',
+        0.85,
+      );
+    });
+    return new File([blob], 'visual-search.jpg', { type: 'image/jpeg' });
+  } finally {
+    bitmap.close();
+  }
+};
+
 const Header = () => {
   const { user, isAdmin, signOut } = useAuth();
   const { itemCount } = useCart();
@@ -49,7 +77,11 @@ const Header = () => {
 
     setIsSearchingImage(true);
     try {
-      const result = await api.searchProductsByImage(file);
+      const preparedImage = await prepareImageForSearch(file);
+      if (preparedImage.size > 5 * 1024 * 1024) {
+        throw new Error('Image must be 5 MB or smaller after compression.');
+      }
+      const result = await api.searchProductsByImage(preparedImage);
       navigate('/products', { state: { imageSearch: result } });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Image search failed. Please try again.');

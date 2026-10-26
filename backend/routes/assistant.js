@@ -29,7 +29,13 @@ const callOpenAI = async (apiKey, body) => {
   const result = await response.json().catch(() => null);
   if (!response.ok) {
     const code = result?.error?.code || result?.error?.type || 'unknown_error';
-    console.error(`OpenAI request failed with status ${response.status} (${code})`);
+    const providerMessage =
+      typeof result?.error?.message === 'string'
+        ? result.error.message.replace(/data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/g, '[image data]').slice(0, 300)
+        : '';
+    console.error(
+      `OpenAI request failed with status ${response.status} (${code})${providerMessage ? `: ${providerMessage}` : ''}`,
+    );
 
     if (response.status === 401 || code === 'invalid_api_key') {
       throw new Error('OpenAI authentication failed. Check OPENAI_API_KEY on the backend.');
@@ -44,7 +50,14 @@ const callOpenAI = async (apiKey, body) => {
       throw new Error('The configured OpenAI model is unavailable. Check OPENAI_MODEL access and configuration.');
     }
     if (response.status === 400) {
-      throw new Error('OpenAI rejected the request. Check image format/size and the configured model.');
+      if (/image|dimension|resolution|format/i.test(`${code} ${providerMessage}`)) {
+        throw new Error(
+          `OpenAI could not process this image. Try a clear JPEG or PNG under 5 MB.${providerMessage ? ` Details: ${providerMessage}` : ''}`,
+        );
+      }
+      throw new Error(
+        `OpenAI rejected the request. Check the model and request configuration.${providerMessage ? ` Details: ${providerMessage}` : ''}`,
+      );
     }
     throw new Error(`OpenAI request failed (HTTP ${response.status}, ${code}). Check backend logs.`);
   }

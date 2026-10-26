@@ -4,15 +4,8 @@ import { supabaseAdmin } from '../config/supabase.js';
 const router = express.Router();
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const getApiKey = (res) => {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    res.status(503).json({ error: 'AI features are not configured on the server.' });
-    return null;
-  }
-  return apiKey;
-};
-
+const hasAIProvider = () =>
+  Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim());
 const callOpenAI = async (apiKey, body) => {
   let response;
   try {
@@ -62,11 +55,128 @@ const callOpenAI = async (apiKey, body) => {
   return result;
 };
 
+const callGemini = async (apiKey, body) => {
+  const systemMessage = body.messages.find((message) => message.role === 'system');
+  const contents = body.messages
+    .filter((message) => message.role !== 'system')
+    .map((message) => {
+      const parts = Array.isArray(message.content)
+        ? message.content.flatMap((part) => {
+            if (part.type === 'text') return [{ text: part.text }];
+            if (part.type === 'image_url') {
+              const match = part.image_url.url.match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/);
+              if (!match) {
+                throw new Error('Gemini fallback requires an uploaded image in a supported format.');
+              }
+              return [{ inlineData: { mimeType: match[1], data: match[2] } }];
+            }
+            return [];
+          })
+        : [{ text: message.content }];
+
+      return {
+        role: message.role === 'assistant' ? 'model' : 'user',
+        parts,
+      };
+    });
+
+  const requestBody = {
+    ...(systemMessage && {
+      systemInstruction: { parts: [{ text: systemMessage.content }] },
+    }),
+    contents,
+    generationConfig: {
+      maxOutputTokens: body.max_tokens || 350,
+      ...(body.response_format && { responseMimeType: 'application/json' }),
+    },
+  };
+
+  let response;
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL || 'gemini-2.5-flash'}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(30000),
+      },
+    );
+  } catch (error) {
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      throw new Error('The Gemini request timed out. Try again with a smaller image or question.');
+    }
+    console.error('Could not connect to Gemini:', error.message);
+    throw new Error('The backend could not connect to Gemini. Check server network access.');
+  }
+
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    const code = result?.error?.status || 'unknown_error';
+    console.error(`Gemini request failed with status ${response.status} (${code})`);
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('Gemini authentication failed. Check GEMINI_API_KEY on the backend.');
+    }
+    if (response.status === 429) {
+      throw new Error('Gemini rate limit or quota reached. Check Google AI billing and usage limits.');
+    }
+    if (response.status === 404) {
+      throw new Error('The configured Gemini model is unavailable. Check GEMINI_MODEL access and configuration.');
+    }
+    throw new Error(`Gemini request failed (HTTP ${response.status}, ${code}). Check backend logs.`);
+  }
+
+  const text = result?.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text || '')
+    .join('');
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new Error('Gemini returned an empty response.');
+  }
+
+  return { choices: [{ message: { content: text } }] };
+};
+
+const callAI = async (body, { allowGeminiFallback = true } = {}) => {
+  const openAIKey = process.env.OPENAI_API_KEY?.trim();
+  const geminiKey = process.env.GEMINI_API_KEY?.trim();
+
+  if (openAIKey) {
+    try {
+      return { result: await callOpenAI(openAIKey, body), provider: 'openai' };
+    } catch (openAIError) {
+      if (!geminiKey || !allowGeminiFallback) throw openAIError;
+      console.warn(`OpenAI failed; trying Gemini fallback: ${openAIError.message}`);
+    }
+  }
+
+  if (geminiKey) {
+    try {
+      return { result: await callGemini(geminiKey, body), provider: 'gemini' };
+    } catch (geminiError) {
+      if (openAIKey) {
+        throw new Error(`Both AI providers failed. Gemini: ${geminiError.message}`);
+      }
+      throw geminiError;
+    }
+  }
+
+  throw new Error('AI features are not configured. Set OPENAI_API_KEY or GEMINI_API_KEY on the backend.');
+};
+
 router.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    configured: Boolean(process.env.OPENAI_API_KEY),
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    configured: hasAIProvider(),
+    providers: {
+      openai: Boolean(process.env.OPENAI_API_KEY?.trim()),
+      gemini: Boolean(process.env.GEMINI_API_KEY?.trim()),
+    },
+    model: process.env.OPENAI_API_KEY?.trim()
+      ? process.env.OPENAI_MODEL || 'gpt-4o-mini'
+      : process.env.GEMINI_MODEL || 'gemini-2.5-flash',
   });
 });
 
@@ -74,8 +184,11 @@ router.post(
   '/image-search',
   express.raw({ type: [...IMAGE_TYPES], limit: MAX_IMAGE_SIZE }),
   async (req, res) => {
-    const apiKey = getApiKey(res);
-    if (!apiKey) return;
+    if (!hasAIProvider()) {
+      return res.status(503).json({
+        error: 'AI features are not configured. Set OPENAI_API_KEY or GEMINI_API_KEY on the backend.',
+      });
+    }
 
     const contentType = req.get('content-type')?.split(';')[0].trim().toLowerCase();
     if (!IMAGE_TYPES.has(contentType)) {
@@ -88,7 +201,7 @@ router.post(
 
     try {
       const image = `data:${contentType};base64,${req.body.toString('base64')}`;
-      const visionResult = await callOpenAI(apiKey, {
+      const { result: visionResult, provider } = await callAI({
         messages: [
           {
             role: 'system',
@@ -201,37 +314,47 @@ router.post(
         return res.json({ description, products: rankedProducts });
       }
 
-      const comparison = await callOpenAI(apiKey, {
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Compare the first image (the customer upload) with the following product images. Rank only the provided product IDs from most to least visually similar, considering item type, color, shape, material, and style. Return JSON with "rankedProductIds" as an array of IDs. Return an empty array if none are reasonably similar.',
-          },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: 'Customer image:' },
-              { type: 'image_url', image_url: { url: image, detail: 'low' } },
-              ...visualCandidates.flatMap(({ product, imageUrl }) => [
-                {
-                  type: 'text',
-                  text: `Product ID: ${product.id}; name: ${product.name}`,
-                },
-                {
-                  type: 'image_url',
-                  image_url: {
-                    url: imageUrl,
-                    detail: 'low',
+      if (provider === 'gemini') {
+        return res.json({ description, products: rankedProducts });
+      }
+
+      let comparison;
+      try {
+        ({ result: comparison } = await callAI({
+          messages: [
+            {
+              role: 'system',
+              content:
+                'Compare the first image (the customer upload) with the following product images. Rank only the provided product IDs from most to least visually similar, considering item type, color, shape, material, and style. Return JSON with "rankedProductIds" as an array of IDs. Return an empty array if none are reasonably similar.',
+            },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Customer image:' },
+                { type: 'image_url', image_url: { url: image, detail: 'low' } },
+                ...visualCandidates.flatMap(({ product, imageUrl }) => [
+                  {
+                    type: 'text',
+                    text: `Product ID: ${product.id}; name: ${product.name}`,
                   },
-                },
-              ]),
-            ],
-          },
-        ],
-        response_format: { type: 'json_object' },
-        max_tokens: 180,
-      });
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: imageUrl,
+                      detail: 'low',
+                    },
+                  },
+                ]),
+              ],
+            },
+          ],
+          response_format: { type: 'json_object' },
+          max_tokens: 180,
+        }, { allowGeminiFallback: false }));
+      } catch (error) {
+        console.warn(`Visual comparison failed; using catalog keyword ranking: ${error.message}`);
+        return res.json({ description, products: rankedProducts });
+      }
 
       const comparisonContent = comparison.choices?.[0]?.message?.content;
       if (typeof comparisonContent !== 'string') {
@@ -273,8 +396,11 @@ router.post(
 );
 
 router.post('/chat', async (req, res) => {
-  const apiKey = getApiKey(res);
-  if (!apiKey) return;
+  if (!hasAIProvider()) {
+    return res.status(503).json({
+      error: 'AI features are not configured. Set OPENAI_API_KEY or GEMINI_API_KEY on the backend.',
+    });
+  }
 
   const { messages } = req.body || {};
   if (
@@ -315,7 +441,7 @@ router.post('/chat', async (req, res) => {
       role,
       content: content.trim(),
     }));
-    const result = await callOpenAI(apiKey, {
+    const { result } = await callAI({
       messages: [
         {
           role: 'system',

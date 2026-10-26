@@ -49,6 +49,11 @@ JWT_SECRET=your_jwt_secret_here
 OPENAI_API_KEY=your_openai_api_key_here
 # Optional; defaults to gpt-4o-mini
 OPENAI_MODEL=gpt-4o-mini
+
+# Optional Gemini fallback (used if OpenAI is unavailable or fails)
+GEMINI_API_KEY=your_gemini_api_key_here
+# Optional; defaults to gemini-2.5-flash
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 ### 3. Run the Server
@@ -85,11 +90,11 @@ The server will start on `http://localhost:3001`
 
 ### AI Assistant
 
-- `GET /api/assistant/health` - Check whether the assistant routes are deployed and an OpenAI key is configured (does not expose the key)
+- `GET /api/assistant/health` - Check whether the assistant routes are deployed and which providers are configured (does not expose keys)
 - `POST /api/assistant/image-search` - Search the active catalog using a JPEG, PNG, or WebP image sent as the raw request body (maximum 5 MB)
 - `POST /api/assistant/chat` - Get a shopping assistant reply. Send `{ "messages": [{ "role": "user", "content": "..." }] }`; at most 8 user/assistant messages are used as context.
 
-Both POST endpoints require `OPENAI_API_KEY` on the backend. Never add the key to the frontend environment or send it to the browser. After deploying backend changes, restart/redeploy the backend and rebuild/redeploy the frontend. `VITE_BACKEND_URL` must point to the backend API root, such as `https://your-backend.example.com/api`.
+Set `OPENAI_API_KEY`, `GEMINI_API_KEY`, or both on the backend. OpenAI is used first when configured; Gemini is used if OpenAI is not configured or its request fails. Never add provider keys to the frontend environment or send them to the browser. Gemini image search ranks products from the image description and catalog keywords; direct comparison of catalog photos remains enabled with OpenAI. After deploying backend changes, restart/redeploy the backend and rebuild/redeploy the frontend. `VITE_BACKEND_URL` must point to the backend API root, such as `https://your-backend.example.com/api`.
 
 ### Categories
 

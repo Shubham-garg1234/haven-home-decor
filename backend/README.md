@@ -85,10 +85,11 @@ The server will start on `http://localhost:3001`
 
 ### AI Assistant
 
+- `GET /api/assistant/health` - Check whether the assistant routes are deployed and an OpenAI key is configured (does not expose the key)
 - `POST /api/assistant/image-search` - Search the active catalog using a JPEG, PNG, or WebP image sent as the raw request body (maximum 5 MB)
 - `POST /api/assistant/chat` - Get a shopping assistant reply. Send `{ "messages": [{ "role": "user", "content": "..." }] }`; at most 8 user/assistant messages are used as context.
 
-Both endpoints require `OPENAI_API_KEY` on the backend. Never add the key to the frontend environment or send it to the browser.
+Both POST endpoints require `OPENAI_API_KEY` on the backend. Never add the key to the frontend environment or send it to the browser. After deploying backend changes, restart/redeploy the backend and rebuild/redeploy the frontend. `VITE_BACKEND_URL` must point to the backend API root, such as `https://your-backend.example.com/api`.
 
 ### Categories
 
@@ -157,4 +158,3 @@ The server uses:
 - All database operations respect Row Level Security (RLS) policies
 - Payment webhooks should be configured in Razorpay dashboard
 - Make sure to set `FRONTEND_URL` for CORS configuration
-

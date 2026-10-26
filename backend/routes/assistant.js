@@ -14,23 +14,61 @@ const getApiKey = (res) => {
 };
 
 const callOpenAI = async (apiKey, body) => {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
+  let response;
+  try {
+    response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', ...body }),
-    signal: AbortSignal.timeout(30000),
-  });
-
-  if (!response.ok) {
-    console.error(`OpenAI request failed with status ${response.status}`);
-    throw new Error('The AI service could not complete the request.');
+      body: JSON.stringify({ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', ...body }),
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (error) {
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      throw new Error('The AI request timed out. Try again with a smaller image or question.');
+    }
+    console.error('Could not connect to OpenAI:', error.message);
+    throw new Error('The backend could not connect to OpenAI. Check server network access.');
   }
 
-  return response.json();
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    const code = result?.error?.code || result?.error?.type || 'unknown_error';
+    console.error(`OpenAI request failed with status ${response.status} (${code})`);
+
+    if (response.status === 401 || code === 'invalid_api_key') {
+      throw new Error('OpenAI authentication failed. Check OPENAI_API_KEY on the backend.');
+    }
+    if (code === 'insufficient_quota') {
+      throw new Error('OpenAI account quota is exhausted. Check the account billing and usage limits.');
+    }
+    if (response.status === 429) {
+      throw new Error('OpenAI rate limit reached. Wait briefly and try again.');
+    }
+    if (response.status === 404 || code === 'model_not_found') {
+      throw new Error('The configured OpenAI model is unavailable. Check OPENAI_MODEL access and configuration.');
+    }
+    if (response.status === 400) {
+      throw new Error('OpenAI rejected the request. Check image format/size and the configured model.');
+    }
+    throw new Error(`OpenAI request failed (HTTP ${response.status}, ${code}). Check backend logs.`);
+  }
+
+  if (!result) {
+    throw new Error('OpenAI returned an invalid response. Check backend logs.');
+  }
+  return result;
 };
+
+router.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    configured: Boolean(process.env.OPENAI_API_KEY),
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+  });
+});
 
 router.post(
   '/image-search',

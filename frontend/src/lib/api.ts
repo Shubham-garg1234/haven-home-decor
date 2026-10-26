@@ -5,7 +5,7 @@
 
 import type { Product } from '@/types';
 
-const API_BASE_URL = import.meta.env.VITE_BACKEND_URL;
+const API_BASE_URL = (import.meta.env.VITE_BACKEND_URL || '').trim().replace(/\/+$/, '');
 
 interface RequestOptions extends RequestInit {
   token?: string;
@@ -16,6 +16,21 @@ class ApiClient {
 
   constructor(baseURL: string) {
     this.baseURL = baseURL;
+  }
+
+  private getUrl(endpoint: string) {
+    if (!this.baseURL) {
+      throw new Error('VITE_BACKEND_URL is not configured for the frontend.');
+    }
+    return `${this.baseURL}${endpoint}`;
+  }
+
+  private async getAssistantError(response: Response, fallback: string) {
+    const body = await response.json().catch(() => null);
+    if (response.status === 404) {
+      return 'Assistant API route not found. Deploy/restart the backend with the latest assistant routes and verify VITE_BACKEND_URL.';
+    }
+    return body?.error || `${fallback} (HTTP ${response.status}).`;
   }
 
   private async request<T>(
@@ -33,7 +48,7 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const url = `${this.baseURL}${endpoint}`;
+    const url = this.getUrl(endpoint);
     const response = await fetch(url, {
       ...fetchOptions,
       headers,
@@ -110,25 +125,31 @@ class ApiClient {
   }
 
   async searchProductsByImage(file: File) {
-    const response = await fetch(`${this.baseURL}/assistant/image-search`, {
+    const response = await fetch(this.getUrl('/assistant/image-search'), {
       method: 'POST',
       headers: { 'Content-Type': file.type },
       body: file,
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Image search failed.' }));
-      throw new Error(error.error || `HTTP error! status: ${response.status}`);
+      throw new Error(await this.getAssistantError(response, 'Image search failed'));
     }
 
     return response.json() as Promise<{ description: string; products: Product[] }>;
   }
 
   async chatWithAssistant(messages: { role: 'user' | 'assistant'; content: string }[]) {
-    return this.request<{ reply: string }>('/assistant/chat', {
+    const response = await fetch(this.getUrl('/assistant/chat'), {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages }),
     });
+
+    if (!response.ok) {
+      throw new Error(await this.getAssistantError(response, 'The assistant could not respond'));
+    }
+
+    return response.json() as Promise<{ reply: string }>;
   }
 
   async createProduct(productData: any, token: string) {

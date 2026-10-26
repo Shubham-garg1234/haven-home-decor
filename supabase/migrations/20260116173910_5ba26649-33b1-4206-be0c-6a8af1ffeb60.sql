@@ -10,6 +10,7 @@ CREATE TABLE public.categories (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 
+
 -- Create products table
 CREATE TABLE public.products (
     id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,

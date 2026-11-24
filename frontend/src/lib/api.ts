@@ -7,6 +7,18 @@ import type { Product } from '@/types';
 
 const API_BASE_URL = (import.meta.env.VITE_BACKEND_URL || '').trim().replace(/\/+$/, '');
 
+export interface RoomRecommendation {
+  product: Product;
+  reason: string;
+}
+
+export interface RoomDesignResult {
+  roomDescription: string;
+  detectedStyle: string;
+  palette: string[];
+  recommendations: RoomRecommendation[];
+}
+
 interface RequestOptions extends RequestInit {
   token?: string;
 }
@@ -136,6 +148,36 @@ class ApiClient {
     }
 
     return response.json() as Promise<{ description: string; products: Product[] }>;
+  }
+
+  async getRoomRecommendations(file: File, roomType: string, style: string) {
+    const query = new URLSearchParams({ roomType, style });
+    const response = await fetch(this.getUrl(`/assistant/room-recommendations?${query}`), {
+      method: 'POST',
+      headers: { 'Content-Type': file.type },
+      body: file,
+    });
+
+    if (!response.ok) {
+      throw new Error(await this.getAssistantError(response, 'Room recommendations failed'));
+    }
+
+    return response.json() as Promise<RoomDesignResult>;
+  }
+
+  async generateRoomPreview(file: File, productIds: string[]) {
+    const query = new URLSearchParams({ productIds: productIds.join(',') });
+    const response = await fetch(this.getUrl(`/assistant/room-preview?${query}`), {
+      method: 'POST',
+      headers: { 'Content-Type': file.type },
+      body: file,
+    });
+
+    if (!response.ok) {
+      throw new Error(await this.getAssistantError(response, 'Room preview generation failed'));
+    }
+
+    return response.json() as Promise<{ image: string; warning: string }>;
   }
 
   async chatWithAssistant(messages: { role: 'user' | 'assistant'; content: string }[]) {

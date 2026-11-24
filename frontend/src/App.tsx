@@ -19,6 +19,7 @@ import AdminOrders from "./pages/admin/Orders";
 import Checkout from "./pages/Checkout";
 import OrderConfirmation from "./pages/OrderConfirmation";
 import Orders from "./pages/Orders";
+import RoomDesigner from "./pages/RoomDesigner";
 import ChatAssistant from "@/components/assistant/ChatAssistant";
 
 const queryClient = new QueryClient();
@@ -35,6 +36,7 @@ const App = () => (
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />
               <Route path="/products" element={<Products />} />
+              <Route path="/room-designer" element={<RoomDesigner />} />
               <Route path="/product/:slug" element={<ProductDetail />} />
               <Route path="/cart" element={<Cart />} />
               <Route path="/categories" element={<Categories />} />

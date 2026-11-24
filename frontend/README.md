@@ -78,6 +78,9 @@ RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
 Run the migration in your Supabase project:
 - Go to Supabase Dashboard → SQL Editor
 - Run the migration file: `supabase/migrations/20260116173910_5ba26649-33b1-4206-be0c-6a8af1ffeb60.sql`
+- Then run `supabase/migrations/20261125000000_seed_decor_catalog.sql` to add starter home-decor categories and products. The seed can be reapplied without duplicating products.
+
+The room designer is available at `/room-designer`. Room recommendations require `OPENAI_API_KEY` or `GEMINI_API_KEY` on the backend; the optional generated room concept requires `OPENAI_API_KEY` and an image-generation-enabled OpenAI account. Uploaded room photos are analyzed by the configured provider and are not stored by the feature.
 
 ### 4. Run the Application
 

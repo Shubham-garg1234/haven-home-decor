@@ -84,6 +84,11 @@ const Index = () => {
                   Explore Categories
                 </Button>
               </Link>
+              <Link to="/room-designer">
+                <Button size="lg" variant="outline" className="border-primary-foreground/30 text-primary-foreground hover:bg-primary-foreground/10">
+                  Design My Room
+                </Button>
+              </Link>
             </div>
           </div>
         </div>

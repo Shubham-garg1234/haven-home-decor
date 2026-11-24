@@ -8,6 +8,7 @@ interface CartContextType {
   items: CartItem[];
   isLoading: boolean;
   addToCart: (productId: string, quantity?: number, variantId?: string) => Promise<void>;
+  addProductsToCart: (productIds: string[]) => Promise<{ added: number; failed: number }>;
   removeFromCart: (itemId: string) => Promise<void>;
   updateQuantity: (itemId: string, quantity: number) => Promise<void>;
   clearCart: () => Promise<void>;
@@ -83,6 +84,31 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const addProductsToCart = async (productIds: string[]) => {
+    if (!user || !session?.access_token) {
+      toast.error('Please sign in to add items to cart');
+      return { added: 0, failed: productIds.length };
+    }
+
+    const uniqueProductIds = [...new Set(productIds)];
+    const results = await Promise.all(uniqueProductIds.map(async (productId) => {
+      try {
+        await api.addToCart(productId, null, 1, session.access_token);
+        return true;
+      } catch (error) {
+        console.error(`Failed to add recommended product ${productId} to cart:`, error);
+        return false;
+      }
+    }));
+
+    await fetchCartItems();
+    const added = results.filter(Boolean).length;
+    const failed = results.length - added;
+    if (added > 0) toast.success(`${added} recommended ${added === 1 ? 'item' : 'items'} added to cart`);
+    if (failed > 0) toast.error(`Could not add ${failed} ${failed === 1 ? 'item' : 'items'} to cart`);
+    return { added, failed };
+  };
+
   const removeFromCart = async (itemId: string) => {
     if (!session?.access_token) return;
 
@@ -137,6 +163,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       items,
       isLoading,
       addToCart,
+      addProductsToCart,
       removeFromCart,
       updateQuantity,
       clearCart,

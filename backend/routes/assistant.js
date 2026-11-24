@@ -4,6 +4,16 @@ import { supabaseAdmin } from '../config/supabase.js';
 const router = express.Router();
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const ROOM_TYPES = new Set(['living room', 'bedroom', 'dining room', 'entryway', 'home office']);
+const ROOM_STYLES = new Set([
+  'let the AI choose',
+  'modern',
+  'scandinavian',
+  'bohemian',
+  'minimalist',
+  'warm contemporary',
+  'traditional',
+]);
 const hasAIProvider = () =>
   Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim());
 const callOpenAI = async (apiKey, body) => {
@@ -404,6 +414,247 @@ router.post(
     } catch (error) {
       console.error('Image search error:', error.message);
       return res.status(502).json({ error: error.message || 'Image search failed.' });
+    }
+  },
+);
+
+router.post(
+  '/room-recommendations',
+  express.raw({ type: [...IMAGE_TYPES], limit: MAX_IMAGE_SIZE }),
+  async (req, res) => {
+    if (!hasAIProvider()) {
+      return res.status(503).json({
+        error: 'AI features are not configured. Set OPENAI_API_KEY or GEMINI_API_KEY on the backend.',
+      });
+    }
+
+    const contentType = req.get('content-type')?.split(';')[0].trim().toLowerCase();
+    if (!IMAGE_TYPES.has(contentType)) {
+      return res.status(415).json({ error: 'Upload a JPEG, PNG, or WebP image.' });
+    }
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Choose a room photo to continue.' });
+    }
+
+    const roomType = String(req.query.roomType || '').toLowerCase();
+    const style = String(req.query.style || '').toLowerCase();
+    if (!ROOM_TYPES.has(roomType) || !ROOM_STYLES.has(style)) {
+      return res.status(400).json({ error: 'Choose a valid room type and design style.' });
+    }
+
+    try {
+      const { data: products, error } = await supabaseAdmin
+        .from('products')
+        .select(
+          'id, name, slug, description, short_description, category_id, price, compare_at_price, stock_quantity, is_active, is_featured, images, specifications, created_at, updated_at, category:categories(name)',
+        )
+        .eq('is_active', true)
+        .gt('stock_quantity', 0)
+        .order('is_featured', { ascending: false })
+        .limit(80);
+
+      if (error) {
+        console.error('Room recommendations catalog query error:', error.message);
+        return res.status(500).json({ error: 'Could not load products for room recommendations.' });
+      }
+      if (!products?.length) {
+        return res.status(404).json({
+          error: 'There are no in-stock products to recommend yet. Please check back soon.',
+        });
+      }
+
+      const catalog = products.map((product) => ({
+        id: product.id,
+        name: product.name,
+        description: product.short_description || product.description,
+        category: product.category?.name || 'Home decor',
+        price: product.price,
+        specifications: product.specifications || {},
+      }));
+      const image = `data:${contentType};base64,${req.body.toString('base64')}`;
+      const { result } = await callAI({
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a thoughtful home stylist. Analyze the uploaded room photo and recommend only products from the provided active catalog. Select 3 to 5 in-stock products that would complement the visible room, colors, and requested style; do not invent products or IDs. Return JSON with "roomDescription" (one concise sentence grounded only in visible details), "detectedStyle" (a short style label), "palette" (3 to 5 concise color names), and "recommendations" (an array of objects with "productId" and a specific one-sentence "reason"). If fewer products are suitable, return fewer. Use only exact catalog IDs.',
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `Room type: ${roomType}. Preferred style: ${style}. Recommend from this catalog only:\n${JSON.stringify(catalog)}`,
+              },
+              { type: 'image_url', image_url: { url: image, detail: 'low' } },
+            ],
+          },
+        ],
+        response_format: { type: 'json_object' },
+        max_tokens: 800,
+      });
+
+      const content = result.choices?.[0]?.message?.content;
+      if (typeof content !== 'string') {
+        throw new Error('The AI service returned invalid room recommendations.');
+      }
+
+      let design;
+      try {
+        design = JSON.parse(content);
+      } catch {
+        throw new Error('The AI service returned invalid room recommendations.');
+      }
+      if (!design || typeof design !== 'object') {
+        throw new Error('The AI service returned invalid room recommendations.');
+      }
+
+      const productsById = new Map(products.map((product) => [product.id, product]));
+      const seenProductIds = new Set();
+      const recommendations = [];
+      for (const recommendation of Array.isArray(design.recommendations) ? design.recommendations : []) {
+        if (recommendations.length >= 5) break;
+        if (
+          !recommendation ||
+          typeof recommendation.productId !== 'string' ||
+          seenProductIds.has(recommendation.productId) ||
+          !productsById.has(recommendation.productId)
+        ) {
+          continue;
+        }
+
+        seenProductIds.add(recommendation.productId);
+        recommendations.push({
+          product: productsById.get(recommendation.productId),
+          reason: typeof recommendation.reason === 'string'
+            ? recommendation.reason.slice(0, 240)
+            : 'Selected to complement your room.',
+        });
+      }
+
+      return res.json({
+        roomDescription: typeof design.roomDescription === 'string'
+          ? design.roomDescription.slice(0, 300)
+          : '',
+        detectedStyle: typeof design.detectedStyle === 'string'
+          ? design.detectedStyle.slice(0, 80)
+          : '',
+        palette: Array.isArray(design.palette)
+          ? design.palette.filter((color) => typeof color === 'string').slice(0, 5)
+          : [],
+        recommendations,
+      });
+    } catch (error) {
+      console.error('Room recommendations error:', error.message);
+      return res.status(502).json({ error: error.message || 'Room recommendations failed.' });
+    }
+  },
+);
+
+router.post(
+  '/room-preview',
+  express.raw({ type: [...IMAGE_TYPES], limit: MAX_IMAGE_SIZE }),
+  async (req, res) => {
+    const openAIKey = process.env.OPENAI_API_KEY?.trim();
+    if (!openAIKey) {
+      return res.status(503).json({
+        error: 'AI room previews require an OpenAI API key configured on the backend.',
+      });
+    }
+
+    const contentType = req.get('content-type')?.split(';')[0].trim().toLowerCase();
+    if (!IMAGE_TYPES.has(contentType)) {
+      return res.status(415).json({ error: 'Upload a JPEG, PNG, or WebP image.' });
+    }
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Choose a room photo to continue.' });
+    }
+
+    const productIds = String(req.query.productIds || '')
+      .split(',')
+      .filter(Boolean)
+      .slice(0, 5);
+    if (
+      productIds.length === 0 ||
+      productIds.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))
+    ) {
+      return res.status(400).json({ error: 'Select at least one valid recommended product.' });
+    }
+
+    try {
+      const { data: products, error } = await supabaseAdmin
+        .from('products')
+        .select('name, short_description, specifications')
+        .in('id', productIds)
+        .eq('is_active', true);
+
+      if (error) {
+        console.error('Room preview catalog query error:', error.message);
+        return res.status(500).json({ error: 'Could not load the selected products for the preview.' });
+      }
+      if (!products?.length) {
+        return res.status(404).json({ error: 'The selected products are no longer available.' });
+      }
+
+      const productDetails = products
+        .map((product) => {
+          const specifications = Object.entries(product.specifications || {})
+            .map(([key, value]) => `${key}: ${value}`)
+            .join(', ');
+          return `${product.name}: ${product.short_description || ''}${specifications ? ` (${specifications})` : ''}`;
+        })
+        .join('\n');
+      const form = new FormData();
+      form.append('model', process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1');
+      form.append(
+        'prompt',
+        `Create a photorealistic interior design concept by restyling the uploaded room photo. Preserve the room's layout, architecture, camera perspective, and recognizable fixed features. Tastefully incorporate decor inspired by these selected store items, using their described materials and colors: ${productDetails}. Keep the result realistic and uncluttered. This is an approximate design visualization, not an exact product photo. Do not add text, labels, or logos.`,
+      );
+      form.append('size', '1024x1024');
+      form.append('quality', 'low');
+      form.append('image', new Blob([req.body], { type: contentType }), `room.${contentType.split('/')[1]}`);
+
+      let response;
+      try {
+        response = await fetch('https://api.openai.com/v1/images/edits', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${openAIKey}` },
+          body: form,
+          signal: AbortSignal.timeout(90000),
+        });
+      } catch (error) {
+        if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+          throw new Error('The room preview took too long to generate. Please try again.');
+        }
+        console.error('Could not connect to OpenAI image generation:', error.message);
+        throw new Error('The backend could not connect to the image generation service.');
+      }
+
+      const result = await response.json().catch(() => null);
+      if (!response.ok) {
+        const code = result?.error?.code || result?.error?.type || 'unknown_error';
+        console.error(`OpenAI image generation failed with status ${response.status} (${code})`);
+        if (response.status === 401) {
+          throw new Error('OpenAI authentication failed. Check OPENAI_API_KEY on the backend.');
+        }
+        if (response.status === 429) {
+          throw new Error('OpenAI image generation is rate limited or out of quota. Try again later.');
+        }
+        if (response.status === 404) {
+          throw new Error('The configured image model is unavailable. Check OPENAI_IMAGE_MODEL access.');
+        }
+        throw new Error(`Room preview generation failed (HTTP ${response.status}). Check backend logs.`);
+      }
+
+      const generatedImage = result?.data?.[0]?.b64_json;
+      if (typeof generatedImage !== 'string' || !generatedImage) {
+        throw new Error('The image service returned no preview. Please try again.');
+      }
+
+      return res.json({ image: generatedImage, warning: 'AI concept visualization; product appearance may differ from the actual items.' });
+    } catch (error) {
+      console.error('Room preview error:', error.message);
+      return res.status(502).json({ error: error.message || 'Room preview generation failed.' });
     }
   },
 );

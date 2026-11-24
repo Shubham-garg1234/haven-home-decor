@@ -1,5 +1,6 @@
 import express from 'express';
 import { supabaseAdmin } from '../config/supabase.js';
+import { buildRoomRecommendations, parseRoomDesignResponse } from '../utils/roomDesign.js';
 
 const router = express.Router();
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -477,7 +478,7 @@ router.post(
           {
             role: 'system',
             content:
-              'You are a thoughtful home stylist. Analyze the uploaded room photo and recommend only products from the provided active catalog. Select 3 to 5 in-stock products that would complement the visible room, colors, and requested style; do not invent products or IDs. Return JSON with "roomDescription" (one concise sentence grounded only in visible details), "detectedStyle" (a short style label), "palette" (3 to 5 concise color names), and "recommendations" (an array of objects with "productId" and a specific one-sentence "reason"). If fewer products are suitable, return fewer. Use only exact catalog IDs.',
+              'You are a thoughtful home stylist. Analyze the uploaded room photo and recommend exactly 5 distinct in-stock catalog products when at least 5 are provided. Pick a useful mix of product types that suit this room, not repeated versions of one item. Do not invent products or IDs; use only exact IDs from the catalog. Return valid JSON with "roomDescription" (one concise sentence grounded only in visible details), "detectedStyle" (a short style label), "palette" (3 to 5 concise color names), and "recommendations" (exactly 5 objects, each with "productId" and a specific one-sentence "reason").',
           },
           {
             role: 'user',
@@ -491,46 +492,15 @@ router.post(
           },
         ],
         response_format: { type: 'json_object' },
-        max_tokens: 800,
+        max_tokens: 1400,
       });
 
-      const content = result.choices?.[0]?.message?.content;
-      if (typeof content !== 'string') {
-        throw new Error('The AI service returned invalid room recommendations.');
-      }
+      const design = parseRoomDesignResponse(result.choices?.[0]?.message?.content);
+      const recommendations = buildRoomRecommendations({ design, products, roomType, style });
 
-      let design;
-      try {
-        design = JSON.parse(content);
-      } catch {
-        throw new Error('The AI service returned invalid room recommendations.');
-      }
-      if (!design || typeof design !== 'object') {
-        throw new Error('The AI service returned invalid room recommendations.');
-      }
-
-      const productsById = new Map(products.map((product) => [product.id, product]));
-      const seenProductIds = new Set();
-      const recommendations = [];
-      for (const recommendation of Array.isArray(design.recommendations) ? design.recommendations : []) {
-        if (recommendations.length >= 5) break;
-        if (
-          !recommendation ||
-          typeof recommendation.productId !== 'string' ||
-          seenProductIds.has(recommendation.productId) ||
-          !productsById.has(recommendation.productId)
-        ) {
-          continue;
-        }
-
-        seenProductIds.add(recommendation.productId);
-        recommendations.push({
-          product: productsById.get(recommendation.productId),
-          reason: typeof recommendation.reason === 'string'
-            ? recommendation.reason.slice(0, 240)
-            : 'Selected to complement your room.',
-        });
-      }
+      console.info(
+        `Room recommendations parsed ${design.recommendations.length} AI picks; returning ${recommendations.length} verified catalog products.`,
+      );
 
       return res.json({
         roomDescription: typeof design.roomDescription === 'string'
@@ -610,8 +580,6 @@ router.post(
         'prompt',
         `Create a photorealistic interior design concept by restyling the uploaded room photo. Preserve the room's layout, architecture, camera perspective, and recognizable fixed features. Tastefully incorporate decor inspired by these selected store items, using their described materials and colors: ${productDetails}. Keep the result realistic and uncluttered. This is an approximate design visualization, not an exact product photo. Do not add text, labels, or logos.`,
       );
-      form.append('size', '1024x1024');
-      form.append('quality', 'low');
       form.append('image', new Blob([req.body], { type: contentType }), `room.${contentType.split('/')[1]}`);
 
       let response;
@@ -633,7 +601,16 @@ router.post(
       const result = await response.json().catch(() => null);
       if (!response.ok) {
         const code = result?.error?.code || result?.error?.type || 'unknown_error';
-        console.error(`OpenAI image generation failed with status ${response.status} (${code})`);
+        const providerMessage =
+          typeof result?.error?.message === 'string'
+            ? result.error.message
+                .replace(/data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/g, '[image data]')
+                .slice(0, 400)
+            : '';
+        const parameter = typeof result?.error?.param === 'string' ? result.error.param : '';
+        console.error(
+          `OpenAI image generation failed with status ${response.status} (${code})${parameter ? `, parameter ${parameter}` : ''}${providerMessage ? `: ${providerMessage}` : ''}`,
+        );
         if (response.status === 401) {
           throw new Error('OpenAI authentication failed. Check OPENAI_API_KEY on the backend.');
         }
@@ -642,6 +619,11 @@ router.post(
         }
         if (response.status === 404) {
           throw new Error('The configured image model is unavailable. Check OPENAI_IMAGE_MODEL access.');
+        }
+        if (response.status === 400) {
+          throw new Error(
+            `OpenAI rejected the room preview request${parameter ? ` (${parameter})` : ''}${providerMessage ? `: ${providerMessage}` : '. Check OPENAI_IMAGE_MODEL and confirm image editing is supported.'}`,
+          );
         }
         throw new Error(`Room preview generation failed (HTTP ${response.status}). Check backend logs.`);
       }

@@ -5,6 +5,7 @@ import { buildRoomRecommendations, parseRoomDesignResponse } from '../utils/room
 const router = express.Router();
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const DEFAULT_IMAGE_MODEL = 'gpt-image-2';
 const ROOM_TYPES = new Set(['living room', 'bedroom', 'dining room', 'entryway', 'home office']);
 const ROOM_STYLES = new Set([
   'let the AI choose',
@@ -575,7 +576,7 @@ router.post(
         })
         .join('\n');
       const form = new FormData();
-      form.append('model', process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1');
+      form.append('model', process.env.OPENAI_IMAGE_MODEL?.trim() || DEFAULT_IMAGE_MODEL);
       form.append(
         'prompt',
         `Create a photorealistic interior design concept by restyling the uploaded room photo. Preserve the room's layout, architecture, camera perspective, and recognizable fixed features. Tastefully incorporate decor inspired by these selected store items, using their described materials and colors: ${productDetails}. Keep the result realistic and uncluttered. This is an approximate design visualization, not an exact product photo. Do not add text, labels, or logos.`,
@@ -621,6 +622,11 @@ router.post(
           throw new Error('The configured image model is unavailable. Check OPENAI_IMAGE_MODEL access.');
         }
         if (response.status === 400) {
+          if (parameter === 'model' || /model .+ does not exist|model .+ not found/i.test(providerMessage)) {
+            throw new Error(
+              `OpenAI cannot use the image model "${process.env.OPENAI_IMAGE_MODEL?.trim() || DEFAULT_IMAGE_MODEL}". Set OPENAI_IMAGE_MODEL to an image model ID available to your OpenAI project, then redeploy the backend.`,
+            );
+          }
           throw new Error(
             `OpenAI rejected the room preview request${parameter ? ` (${parameter})` : ''}${providerMessage ? `: ${providerMessage}` : '. Check OPENAI_IMAGE_MODEL and confirm image editing is supported.'}`,
           );

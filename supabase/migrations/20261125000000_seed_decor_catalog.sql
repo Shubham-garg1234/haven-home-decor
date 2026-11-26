@@ -7,7 +7,17 @@ VALUES
   ('Furniture & Accents', 'furniture-accents', 'Useful finishing pieces for comfortable, considered rooms.', 'https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?auto=format&fit=crop&w=900&q=85', true)
 ON CONFLICT (slug) DO UPDATE
 SET name = EXCLUDED.name,
-    description = EXCLUDED.description,
+    description = concat_ws(
+      E'\n\n',
+      EXCLUDED.description,
+      'Catalog visual attributes: ' || (
+        SELECT string_agg(
+          initcap(replace(attribute.key, '_', ' ')) || ': ' || attribute.value,
+          '; ' ORDER BY attribute.key
+        )
+        FROM jsonb_each_text(EXCLUDED.specifications) AS attribute(key, value)
+      )
+    ),
     image_url = EXCLUDED.image_url,
     is_active = EXCLUDED.is_active,
     updated_at = now();

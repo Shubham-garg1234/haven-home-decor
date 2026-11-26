@@ -12,6 +12,8 @@ Express.js backend server for Haven Home Decor e-commerce platform.
 - ✅ Payment Integration (Razorpay)
 - ✅ Admin Dashboard (Stats, User Management)
 - ✅ Role-based Access Control (Admin/Customer)
+- ✅ AI Image Search and Shopping Chat
+- ✅ AI Room Recommendations and Concept Previews
 
 ## Setup
 
@@ -49,9 +51,9 @@ JWT_SECRET=your_jwt_secret_here
 OPENAI_API_KEY=your_openai_api_key_here
 # Optional; defaults to gpt-4o-mini
 OPENAI_MODEL=gpt-4o-mini
-# Optional; defaults to gpt-image-1.5 and is used only for generated room concepts.
+# Optional; defaults to gpt-image-2 and is used only for generated room concepts.
 # Set this to an image model ID available to your OpenAI project.
-OPENAI_IMAGE_MODEL=gpt-image-1.5
+OPENAI_IMAGE_MODEL=gpt-image-2
 
 # Optional Gemini fallback (used if OpenAI is unavailable or fails)
 GEMINI_API_KEY=your_gemini_api_key_here
@@ -96,7 +98,7 @@ The server will start on `http://localhost:3001`
 - `GET /api/assistant/health` - Check whether the assistant routes are deployed and which providers are configured (does not expose keys)
 - `POST /api/assistant/image-search` - Search the active catalog using a JPEG, PNG, or WebP image sent as the raw request body (maximum 5 MB)
 - `POST /api/assistant/room-recommendations?roomType=living%20room&style=let%20the%20AI%20choose` - Analyze a room photo and recommend up to five in-stock catalog products. Send a JPEG, PNG, or WebP image as the raw request body (maximum 5 MB).
-- `POST /api/assistant/room-preview?productIds=<comma-separated-product-UUIDs>` - Generate an optional room concept image using an OpenAI image model and up to five selected products. Requires `OPENAI_API_KEY` and access to the configured `OPENAI_IMAGE_MODEL`; generated concepts are approximate, not exact product renderings.
+- `POST /api/assistant/room-preview?productIds=<comma-separated-product-UUIDs>&roomType=living%20room&style=bohemian` - Generate an optional room concept using the selected products' catalog descriptions and product images when available. Requires `OPENAI_API_KEY` and access to the configured `OPENAI_IMAGE_MODEL`; concepts are approximate visualizations, not exact product renderings.
 - `POST /api/assistant/chat` - Get a shopping assistant reply. Send `{ "messages": [{ "role": "user", "content": "..." }] }`; at most 8 user/assistant messages are used as context.
 
 Set `OPENAI_API_KEY`, `GEMINI_API_KEY`, or both on the backend for room recommendations. OpenAI is used first when configured; Gemini is used if OpenAI is not configured or its request fails. Room concept generation is optional, uses the OpenAI Images API, and may incur provider charges. Ensure the OpenAI project associated with `OPENAI_API_KEY` has access to the image model set in `OPENAI_IMAGE_MODEL`; model availability can vary by project. Never add provider keys to the frontend environment or send them to the browser. Gemini image search ranks products from the image description and catalog keywords; direct comparison of catalog photos remains enabled with OpenAI. After deploying backend changes, restart/redeploy the backend and rebuild/redeploy the frontend. `VITE_BACKEND_URL` must point to the backend API root, such as `https://your-backend.example.com/api`.

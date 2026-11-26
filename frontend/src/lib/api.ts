@@ -16,6 +16,8 @@ export interface RoomDesignResult {
   roomDescription: string;
   detectedStyle: string;
   palette: string[];
+  roomType: string;
+  style: string;
   recommendations: RoomRecommendation[];
 }
 
@@ -165,8 +167,8 @@ class ApiClient {
     return response.json() as Promise<RoomDesignResult>;
   }
 
-  async generateRoomPreview(file: File, productIds: string[]) {
-    const query = new URLSearchParams({ productIds: productIds.join(',') });
+  async generateRoomPreview(file: File, productIds: string[], roomType: string, style: string) {
+    const query = new URLSearchParams({ productIds: productIds.join(','), roomType, style });
     const response = await fetch(this.getUrl(`/assistant/room-preview?${query}`), {
       method: 'POST',
       headers: { 'Content-Type': file.type },

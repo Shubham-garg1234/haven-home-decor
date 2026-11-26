@@ -1,6 +1,12 @@
 import express from 'express';
 import { supabaseAdmin } from '../config/supabase.js';
-import { buildRoomRecommendations, parseRoomDesignResponse } from '../utils/roomDesign.js';
+import {
+  buildRoomPreviewRequest,
+  buildRoomRecommendations,
+  describeCatalogProduct,
+  isProductSuitableForRoom,
+  parseRoomDesignResponse,
+} from '../utils/roomDesign.js';
 
 const router = express.Router();
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -465,10 +471,13 @@ router.post(
         });
       }
 
-      const catalog = products.map((product) => ({
+      const roomProducts = products.filter((product) =>
+        isProductSuitableForRoom(product, roomType),
+      );
+      const catalog = roomProducts.map((product) => ({
         id: product.id,
         name: product.name,
-        description: product.short_description || product.description,
+        description: describeCatalogProduct(product),
         category: product.category?.name || 'Home decor',
         price: product.price,
         specifications: product.specifications || {},
@@ -479,7 +488,7 @@ router.post(
           {
             role: 'system',
             content:
-              'You are a thoughtful home stylist. Analyze the uploaded room photo and recommend exactly 5 distinct in-stock catalog products when at least 5 are provided. Pick a useful mix of product types that suit this room, not repeated versions of one item. Do not invent products or IDs; use only exact IDs from the catalog. Return valid JSON with "roomDescription" (one concise sentence grounded only in visible details), "detectedStyle" (a short style label), "palette" (3 to 5 concise color names), and "recommendations" (exactly 5 objects, each with "productId" and a specific one-sentence "reason").',
+              `You are a thoughtful home stylist. The requested room type (${roomType}) and design style (${style}) are hard constraints. Recommend up to 5 distinct in-stock catalog products that belong in this room and fit this style; never choose products for a different room type. Pick a useful mix, not repeated versions of one item. Do not invent products or IDs; use only exact IDs from the catalog. Product descriptions and catalog attributes are factual constraints. Return valid JSON with "roomDescription" (one concise sentence grounded only in visible details), "detectedStyle" (the requested style, or a short style label if the preference is "let the AI choose"), "palette" (3 to 5 concise color names), and "recommendations" (up to 5 objects, each with "productId" and a specific one-sentence "reason").`,
           },
           {
             role: 'user',
@@ -497,7 +506,13 @@ router.post(
       });
 
       const design = parseRoomDesignResponse(result.choices?.[0]?.message?.content);
-      const recommendations = buildRoomRecommendations({ design, products, roomType, style });
+      const recommendations = buildRoomRecommendations({ design, products: roomProducts, roomType, style });
+      const aiStyle = typeof design.detectedStyle === 'string'
+        ? design.detectedStyle.trim().toLowerCase()
+        : '';
+      const resolvedStyle = style === 'let the AI choose'
+        ? (ROOM_STYLES.has(aiStyle) && aiStyle !== 'let the AI choose' ? aiStyle : 'modern')
+        : style;
 
       console.info(
         `Room recommendations parsed ${design.recommendations.length} AI picks; returning ${recommendations.length} verified catalog products.`,
@@ -507,12 +522,12 @@ router.post(
         roomDescription: typeof design.roomDescription === 'string'
           ? design.roomDescription.slice(0, 300)
           : '',
-        detectedStyle: typeof design.detectedStyle === 'string'
-          ? design.detectedStyle.slice(0, 80)
-          : '',
+        detectedStyle: resolvedStyle,
         palette: Array.isArray(design.palette)
           ? design.palette.filter((color) => typeof color === 'string').slice(0, 5)
           : [],
+        roomType,
+        style: resolvedStyle,
         recommendations,
       });
     } catch (error) {
@@ -541,12 +556,20 @@ router.post(
       return res.status(400).json({ error: 'Choose a room photo to continue.' });
     }
 
+    const roomType = String(req.query.roomType || '').toLowerCase();
+    const style = String(req.query.style || '').toLowerCase();
+    if (!ROOM_TYPES.has(roomType) || !ROOM_STYLES.has(style)) {
+      return res.status(400).json({ error: 'Choose a valid room type and design style.' });
+    }
+
     const productIds = String(req.query.productIds || '')
       .split(',')
       .filter(Boolean)
-      .slice(0, 5);
+      .map((id) => id.trim());
     if (
       productIds.length === 0 ||
+      productIds.length > 5 ||
+      new Set(productIds).size !== productIds.length ||
       productIds.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))
     ) {
       return res.status(400).json({ error: 'Select at least one valid recommended product.' });
@@ -555,7 +578,7 @@ router.post(
     try {
       const { data: products, error } = await supabaseAdmin
         .from('products')
-        .select('name, short_description, specifications')
+        .select('id, name, description, short_description, category:categories(name), images, specifications')
         .in('id', productIds)
         .eq('is_active', true);
 
@@ -563,32 +586,32 @@ router.post(
         console.error('Room preview catalog query error:', error.message);
         return res.status(500).json({ error: 'Could not load the selected products for the preview.' });
       }
-      if (!products?.length) {
+      const productsById = new Map((products || []).map((product) => [product.id, product]));
+      const orderedProducts = productIds.map((id) => productsById.get(id)).filter(Boolean);
+      if (orderedProducts.length !== productIds.length) {
         return res.status(404).json({ error: 'The selected products are no longer available.' });
       }
+      if (orderedProducts.some((product) => !isProductSuitableForRoom(product, roomType))) {
+        return res.status(400).json({ error: 'Select products recommended for the chosen room type.' });
+      }
 
-      const productDetails = products
-        .map((product) => {
-          const specifications = Object.entries(product.specifications || {})
-            .map(([key, value]) => `${key}: ${value}`)
-            .join(', ');
-          return `${product.name}: ${product.short_description || ''}${specifications ? ` (${specifications})` : ''}`;
-        })
-        .join('\n');
-      const form = new FormData();
-      form.append('model', process.env.OPENAI_IMAGE_MODEL?.trim() || DEFAULT_IMAGE_MODEL);
-      form.append(
-        'prompt',
-        `Create a photorealistic interior design concept by restyling the uploaded room photo. Preserve the room's layout, architecture, camera perspective, and recognizable fixed features. Tastefully incorporate decor inspired by these selected store items, using their described materials and colors: ${productDetails}. Keep the result realistic and uncluttered. This is an approximate design visualization, not an exact product photo. Do not add text, labels, or logos.`,
-      );
-      form.append('image', new Blob([req.body], { type: contentType }), `room.${contentType.split('/')[1]}`);
+      const requestBody = buildRoomPreviewRequest({
+        image: `data:${contentType};base64,${req.body.toString('base64')}`,
+        roomType,
+        style,
+        products: orderedProducts,
+        model: process.env.OPENAI_IMAGE_MODEL?.trim() || DEFAULT_IMAGE_MODEL,
+      });
 
       let response;
       try {
         response = await fetch('https://api.openai.com/v1/images/edits', {
           method: 'POST',
-          headers: { Authorization: `Bearer ${openAIKey}` },
-          body: form,
+          headers: {
+            Authorization: `Bearer ${openAIKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
           signal: AbortSignal.timeout(90000),
         });
       } catch (error) {

@@ -109,6 +109,8 @@ const RoomDesigner = () => {
       const result = await api.generateRoomPreview(
         roomPhoto,
         design.recommendations.map(({ product }) => product.id),
+        design.roomType,
+        design.style,
       );
       setGeneratedImage(`data:image/png;base64,${result.image}`);
     } catch (requestError) {
@@ -205,7 +207,16 @@ const RoomDesigner = () => {
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="room-type">Room type</Label>
-                    <Select value={roomType} onValueChange={setRoomType}>
+                    <Select
+                      value={roomType}
+                      disabled={isAnalyzing || isGenerating}
+                      onValueChange={(value) => {
+                        setRoomType(value);
+                        setDesign(null);
+                        setGeneratedImage('');
+                        setError('');
+                      }}
+                    >
                       <SelectTrigger id="room-type">
                         <SelectValue />
                       </SelectTrigger>
@@ -220,7 +231,16 @@ const RoomDesigner = () => {
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="room-style">Style direction</Label>
-                    <Select value={style} onValueChange={setStyle}>
+                    <Select
+                      value={style}
+                      disabled={isAnalyzing || isGenerating}
+                      onValueChange={(value) => {
+                        setStyle(value);
+                        setDesign(null);
+                        setGeneratedImage('');
+                        setError('');
+                      }}
+                    >
                       <SelectTrigger id="room-style">
                         <SelectValue />
                       </SelectTrigger>
@@ -292,7 +312,7 @@ const RoomDesigner = () => {
                   <div>
                     <h2 className="font-serif text-2xl font-semibold">A fresh take on your space</h2>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      AI concept based on your room and selected DecorNest pieces. Product details may differ.
+                      The concept uses your selected catalog pieces and product photos as references; generated details may still vary.
                     </p>
                   </div>
                   <a
@@ -351,7 +371,7 @@ const RoomDesigner = () => {
                 </div>
               </div>
               <p className="mb-5 text-sm text-muted-foreground">
-                Preview generation uses OpenAI image generation and may take a little while. It creates an approximate visualization, not an exact product rendering.
+                Preview generation uses OpenAI image generation and may take a little while. The selected product photos and catalog details guide this approximate visualization; it is not an exact product rendering.
               </p>
 
               <div className="grid gap-4 sm:grid-cols-2">
